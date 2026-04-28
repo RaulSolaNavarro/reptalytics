@@ -1,0 +1,132 @@
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&display=swap" rel="stylesheet">
+
+<div class="rept-banner">
+  <div class="rept-banner-inner">
+    <div class="rept-logo-row">
+      <div class="rept-logo-pill">REPTALYTICS</div>
+      <div class="rept-logo-pill rept-logo-accent">NYC OPEN DATA</div>
+    </div>
+    <h1 class="rept-title">NYC Restaurant<br>Inspection Analysis</h1>
+    <p class="rept-subtitle">Exploring Patterns, Violations, and Insights Across New York City's Dining Landscape</p>
+    <div class="rept-meta-row">
+      <div class="rept-meta-block">
+        <div class="rept-meta-label">Team</div>
+        <div class="rept-meta-value">Randi Shimsky-Agosto · Haley Vargas · Victor Murra Schott · Raúl J. Solá Navarro</div>
+      </div>
+      <div class="rept-meta-block">
+        <div class="rept-meta-label">Course</div>
+        <div class="rept-meta-value">CIS 9650 · Python Programming for Analytics · Baruch College</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+/* Hide Quarto's default title block since we replace it */
+#title-block-header { display: none !important; }
+
+.rept-banner {
+  background: linear-gradient(150deg, #0f2447 0%, #1B3A6B 45%, #2E6DA4 100%);
+  padding: 3rem 3rem 2.5rem;
+  margin-bottom: 0;
+  border-bottom: 4px solid #E09B1A;
+  position: relative;
+  overflow: hidden;
+}
+
+/* subtle geometric texture */
+.rept-banner::before {
+  content: '';
+  position: absolute;
+  top: -60px; right: -60px;
+  width: 320px; height: 320px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.03);
+  pointer-events: none;
+}
+.rept-banner::after {
+  content: '';
+  position: absolute;
+  bottom: -80px; left: 30%;
+  width: 200px; height: 200px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.02);
+  pointer-events: none;
+}
+
+.rept-banner-inner {
+  position: relative;
+  z-index: 1;
+  max-width: 860px;
+}
+
+.rept-logo-row {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.rept-logo-pill {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.7);
+  border: 1px solid rgba(255,255,255,0.25);
+  border-radius: 100px;
+  padding: 0.25rem 0.85rem;
+}
+
+.rept-logo-accent {
+  color: #E09B1A;
+  border-color: rgba(224,155,26,0.4);
+}
+
+.rept-title {
+  font-family: 'DM Serif Display', serif !important;
+  font-size: 2.8rem !important;
+  font-weight: 400 !important;
+  color: #ffffff !important;
+  line-height: 1.15 !important;
+  margin: 0 0 0.9rem !important;
+  letter-spacing: -0.01em !important;
+}
+
+.rept-subtitle {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 1rem;
+  font-weight: 300;
+  color: rgba(255,255,255,0.75);
+  margin: 0 0 2rem;
+  line-height: 1.5;
+  max-width: 680px;
+}
+
+.rept-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2rem;
+  border-top: 1px solid rgba(255,255,255,0.15);
+  padding-top: 1.25rem;
+}
+
+.rept-meta-label {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.45);
+  margin-bottom: 0.25rem;
+}
+
+.rept-meta-value {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 0.85rem;
+  font-weight: 300;
+  color: rgba(255,255,255,0.82);
+}
+</style>
