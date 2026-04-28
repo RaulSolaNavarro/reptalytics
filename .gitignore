@@ -1,0 +1,35 @@
+# R / RStudio
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+
+# Quarto output
+/_site/
+/docs/*.html
+*.html
+*_files/
+
+# Python
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.venv/
+env/
+*.egg-info/
+
+# Data files (large / raw)
+data/*.csv
+data/*.xlsx
+data/*.dta
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets / tokens
+.env
+secrets.py
+
+/.quarto/
+**/*.quarto_ipynb

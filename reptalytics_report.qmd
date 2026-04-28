@@ -1,0 +1,776 @@
+---
+title: "Reptalytics: NYC Restaurant Inspection Analysis"
+subtitle: "Exploring Patterns, Violations, and Insights Across New York City's Dining Landscape"
+author:
+  - name: "Randi Shimsky-Agosto"
+  - name: "Haley Vargas"
+  - name: "Victor Murra Schott"
+  - name: "Raúl J. Solá Navarro"
+date: last-modified
+date-format: "MMMM D, YYYY"
+format:
+  html:
+    theme: cosmo
+    css: docs/custom.css
+    toc: true
+    toc-depth: 3
+    toc-title: "Contents"
+    toc-location: left
+    number-sections: true
+    smooth-scroll: true
+    code-fold: true
+    code-summary: "Show code"
+    code-tools: true
+    embed-resources: true
+    fig-width: 10
+    fig-height: 6
+    highlight-style: github
+    html-math-method: katex
+    include-before-body: docs/title_banner.html
+execute:
+  echo: true
+  warning: false
+  message: false
+  cache: false
+jupyter: python3
+---
+
+```{python}
+#| label: setup
+#| include: false
+
+import pandas as pd
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import scipy.stats as stats
+import requests
+import warnings
+warnings.filterwarnings("ignore")
+
+pd.set_option("display.max_columns", 20)
+pd.set_option("display.float_format", "{:.2f}".format)
+
+import plotly.io as pio
+pio.templates.default = "plotly_white"
+
+NAVY    = "#1B3A6B"
+STEEL   = "#2E6DA4"
+CORAL   = "#C94F3D"
+GOLD    = "#E09B1A"
+MINT    = "#2A9490"
+PALETTE = [NAVY, STEEL, CORAL, GOLD, MINT, "#7B4E9E", "#4CAF50"]
+
+# ── Helper: styled pandas table ──────────────────────────────────────────────
+def styled_table(df, hide_index=True):
+    s = df.style.set_table_attributes('class="reptalytics-table"')
+    if hide_index:
+        s = s.hide(axis="index")
+    return s
+```
+
+```{python}
+#| label: load-data
+#| include: false
+
+APP_TOKEN = None
+BASE_URL  = "https://data.cityofnewyork.us/resource/43nn-pn8j.json"
+LIMIT     = 50_000
+COLS      = (
+    "camis,dba,boro,cuisine_description,inspection_date,"
+    "action,violation_code,violation_description,"
+    "critical_flag,score,grade"
+)
+
+def fetch_all(base_url, limit=50_000, cols=None):
+    headers = {"X-App-Token": APP_TOKEN} if APP_TOKEN else {}
+    frames, offset = [], 0
+    while True:
+        params = {"$limit": limit, "$offset": offset, "$order": ":id"}
+        if cols:
+            params["$select"] = cols
+        resp = requests.get(base_url, params=params, headers=headers, timeout=120)
+        resp.raise_for_status()
+        batch = resp.json()
+        if not batch:
+            break
+        frames.append(pd.DataFrame(batch))
+        offset += limit
+        if len(batch) < limit:
+            break
+    return pd.concat(frames, ignore_index=True)
+
+raw = fetch_all(BASE_URL, limit=LIMIT, cols=COLS)
+```
+
+```{python}
+#| label: clean-data
+#| include: false
+
+raw = raw.rename(columns={
+    "camis": "Restaurant ID", "dba": "Restaurant Name",
+    "boro": "Borough", "cuisine_description": "Cuisine Description",
+    "inspection_date": "Inspection Date", "action": "Action",
+    "violation_code": "Violation Code", "violation_description": "Violation Description",
+    "critical_flag": "Critical Flag", "score": "Score", "grade": "Grade",
+})
+
+raw["Inspection Date"] = pd.to_datetime(raw["Inspection Date"], errors="coerce")
+raw["Score"]           = pd.to_numeric(raw["Score"], errors="coerce")
+raw["Year"]            = raw["Inspection Date"].dt.year
+raw["Month"]           = raw["Inspection Date"].dt.month
+
+df = raw[raw["Year"].between(2021, 2024)].copy()
+df = df[~df["Borough"].isin(["0", "Missing", "", None])]
+df = df.dropna(subset=["Borough"])
+
+unique_inspections = df.drop_duplicates(subset=["Restaurant ID", "Inspection Date"]).copy()
+```
+
+---
+
+## Introduction
+
+New York City operates one of the most rigorous restaurant inspection programs in the world. Every restaurant is inspected at least once a year by the NYC Department of Health and Mental Hygiene (DOHMH), receiving a numerical **violation score** (lower = better) and a letter **grade** posted publicly on the front door.
+
+This report analyzes publicly available inspection data from **2021 through 2024** to answer five questions:
+
+1. **Trend**: How have the number of inspections and average violation scores changed over time?
+2. **Borough**: Do inspection grades differ significantly across the five boroughs?
+3. **Closures**: Which boroughs see the highest restaurant closure rates, and is that rate rising?
+4. **Cuisine**: Which cuisine categories accumulate the highest average violation scores?
+5. **Violations**: What are the most common violation codes, and do they follow seasonal patterns?
+
+::: {.callout-note}
+Data is pulled live from the [NYC Open Data SODA API](https://data.cityofnewyork.us/resource/43nn-pn8j.json) each time this document renders.
+:::
+
+---
+
+## Exploratory Data Analysis
+
+```{python}
+#| label: eda-stats
+#| code-fold: true
+#| code-summary: "Show code"
+
+from IPython.display import display, HTML
+
+rows_fetched = len(raw)
+rows_filtered = len(df)
+unique_insp = len(unique_inspections)
+boroughs = sorted(df["Borough"].dropna().unique())
+n_cols = df.shape[1]
+
+stats_html = f"""
+<div class="stat-grid">
+  <div class="stat-card">
+    <div class="stat-value">{rows_fetched:,}</div>
+    <div class="stat-label">Total Rows Fetched</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{rows_filtered:,}</div>
+    <div class="stat-label">Rows (2021–2024)</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{unique_insp:,}</div>
+    <div class="stat-label">Unique Inspections</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{n_cols}</div>
+    <div class="stat-label">Columns</div>
+  </div>
+</div>
+"""
+display(HTML(stats_html))
+```
+
+```{python}
+#| label: eda-schema
+#| code-fold: true
+#| code-summary: "Show code"
+
+schema = pd.DataFrame({
+    "Column": df.dtypes.index,
+    "Type":   df.dtypes.astype(str).values,
+    "Non-Null": df.notnull().sum().values,
+    "% Missing": (df.isnull().mean() * 100).round(1).values,
+})
+styled_table(schema)
+```
+
+```{python}
+#| label: eda-sample
+#| code-fold: true
+#| code-summary: "Show code"
+
+sample_cols = ["Restaurant Name", "Borough", "Cuisine Description",
+               "Inspection Date", "Violation Code", "Score", "Grade"]
+styled_table(
+    df[sample_cols].sample(8, random_state=42).reset_index(drop=True)
+)
+```
+
+```{python}
+#| label: eda-nulls
+#| code-fold: true
+#| code-summary: "Show code"
+
+null_pct = (df.isnull().sum() / len(df) * 100).round(1).reset_index()
+null_pct.columns = ["Column", "% Missing"]
+
+fig = px.bar(
+    null_pct.sort_values("% Missing", ascending=False),
+    x="Column", y="% Missing",
+    title="Missing Values by Column (%)",
+    color="% Missing",
+    color_continuous_scale=["#2A9490", "#E09B1A", "#C94F3D"],
+    text_auto=".1f",
+)
+fig.update_layout(xaxis_tickangle=-30, showlegend=False, height=380)
+fig.show()
+```
+
+---
+
+## Q1: Inspection Volume & Violation Score Trends {#sec-q1}
+
+> **Question:** How have the total number of inspections and average violation scores changed from 2021 to 2024?
+
+```{python}
+#| label: q1-compute
+#| code-fold: true
+#| code-summary: "Show code"
+
+yearly_inspections = (
+    unique_inspections.groupby("Year").size().reset_index(name="Total Inspections")
+)
+yearly_avg_score = (
+    unique_inspections.dropna(subset=["Score"])
+    .groupby("Year")["Score"].mean()
+    .reset_index(name="Avg Violation Score")
+)
+yearly_summary = yearly_inspections.merge(yearly_avg_score, on="Year")
+yearly_summary["Avg Violation Score"] = yearly_summary["Avg Violation Score"].round(2)
+
+styled_table(yearly_summary)
+```
+
+```{python}
+#| label: q1-plot-inspections
+#| code-fold: true
+#| code-summary: "Show code"
+
+fig1 = px.line(
+    yearly_summary, x="Year", y="Total Inspections",
+    markers=True,
+    title="Total Inspections by Year",
+    labels={"Total Inspections": "Number of Inspections"},
+    color_discrete_sequence=[STEEL],
+)
+fig1.update_traces(line_width=3, marker_size=10)
+fig1.update_layout(
+    xaxis=dict(tickvals=[2021, 2022, 2023, 2024]),
+    height=380,
+)
+fig1.show()
+```
+
+```{python}
+#| label: q1-plot-scores
+#| code-fold: true
+#| code-summary: "Show code"
+
+fig2 = px.line(
+    yearly_summary, x="Year", y="Avg Violation Score",
+    markers=True,
+    title="Average Violation Score by Year  <span style='font-size:0.8em;color:#888'>(lower = better)</span>",
+    labels={"Avg Violation Score": "Avg Violation Score"},
+    color_discrete_sequence=[CORAL],
+)
+fig2.update_traces(line_width=3, marker_size=10)
+fig2.update_layout(
+    xaxis=dict(tickvals=[2021, 2022, 2023, 2024]),
+    height=380,
+)
+fig2.show()
+```
+
+::: {.callout-warning}
+**Key finding:** Both the number of inspections *and* average violation scores have risen steadily since 2021. The inspection activity rebounded after COVID-era slowdowns, and the rising average score suggests compliance challenges citywide.
+:::
+
+---
+
+## Q2: Grade Differences Across Boroughs {#sec-q2}
+
+> **Question:** Do inspection grades differ significantly across NYC's five boroughs? (ANOVA test)
+
+```{python}
+#| label: q2-compute
+#| code-fold: true
+#| code-summary: "Show code"
+
+grade_df = df[["Restaurant ID", "Borough", "Inspection Date", "Grade"]].copy()
+grade_df = grade_df[~grade_df["Grade"].isin(["P", "N", "Z", "Not Yet Graded"])]
+grade_df = grade_df.dropna(subset=["Grade"])
+grade_unique = grade_df.drop_duplicates(subset=["Restaurant ID", "Inspection Date"]).copy()
+
+grade_map = {"A": 3, "B": 2, "C": 1}
+grade_unique["Grade_Num"] = grade_unique["Grade"].map(grade_map)
+grade_unique["Year"]      = grade_unique["Inspection Date"].dt.year
+
+avg_grade_borough = (
+    grade_unique.groupby("Borough")["Grade_Num"]
+    .mean().sort_values(ascending=False).reset_index()
+    .rename(columns={"Grade_Num": "Avg Grade Score"})
+)
+avg_grade_borough["Avg Grade Score"] = avg_grade_borough["Avg Grade Score"].round(4)
+
+styled_table(avg_grade_borough)
+```
+
+```{python}
+#| label: q2-plot-bar
+#| code-fold: true
+#| code-summary: "Show code"
+
+fig = px.bar(
+    avg_grade_borough, x="Borough", y="Avg Grade Score",
+    color="Borough", color_discrete_sequence=PALETTE,
+    text=avg_grade_borough["Avg Grade Score"].round(2),
+    title="Average Inspection Grade by Borough  <span style='font-size:0.8em;color:#888'>(A=3, B=2, C=1)</span>",
+)
+fig.update_layout(yaxis_range=[2.5, 3.05], showlegend=False, height=400)
+fig.update_traces(textposition="outside")
+fig.show()
+```
+
+```{python}
+#| label: q2-plot-yoy
+#| code-fold: true
+#| code-summary: "Show code"
+
+avg_yoy = (
+    grade_unique.groupby(["Year", "Borough"])["Grade_Num"]
+    .mean().reset_index().rename(columns={"Grade_Num": "Avg Grade Score"})
+)
+
+fig2 = px.line(
+    avg_yoy, x="Year", y="Avg Grade Score", color="Borough",
+    markers=True, color_discrete_sequence=PALETTE,
+    title="Average Inspection Grade by Borough — Year Over Year",
+    labels={"Avg Grade Score": "Avg Grade Score (A=3, B=2, C=1)"},
+)
+fig2.update_layout(
+    yaxis_range=[2.5, 3.05],
+    xaxis=dict(tickvals=[2021, 2022, 2023, 2024]),
+    height=420,
+)
+fig2.show()
+```
+
+```{python}
+#| label: q2-anova
+#| code-fold: true
+#| code-summary: "Show code"
+
+from IPython.display import display, HTML
+
+borough_groups = [
+    grade_unique[grade_unique["Borough"] == b]["Grade_Num"].dropna()
+    for b in grade_unique["Borough"].unique()
+]
+f_stat, p_value = stats.f_oneway(*borough_groups)
+sig = p_value < 0.05
+
+anova_html = f"""
+<div class="anova-box">
+  <div class="anova-title">One-Way ANOVA Results</div>
+  <div class="anova-grid">
+    <div class="anova-item">
+      <span class="anova-label">F-statistic</span>
+      <span class="anova-value">{f_stat:.4f}</span>
+    </div>
+    <div class="anova-item">
+      <span class="anova-label">P-value</span>
+      <span class="anova-value">{p_value:.2e}</span>
+    </div>
+    <div class="anova-item anova-result {'anova-sig' if sig else 'anova-ns'}">
+      <span>{"✓ Statistically significant (p < 0.05)" if sig else "✗ Not statistically significant"}</span>
+    </div>
+  </div>
+</div>
+"""
+display(HTML(anova_html))
+```
+
+::: {.callout-note}
+**ANOVA result:** With an F-statistic above 15 and a p-value well below 0.05, we reject the null hypothesis. Borough membership is a statistically significant predictor of inspection grade as we see that Staten Island and Manhattan consistently outperform the Bronx and Queens.
+:::
+
+---
+
+## Q3: Restaurant Closure Rates {#sec-q3}
+
+> **Question:** How do restaurant closure rates compare across boroughs, and how has the rate changed over time?
+
+```{python}
+#| label: q3-compute
+#| code-fold: true
+#| code-summary: "Show code"
+
+closure_df = df.copy()
+closure_df["Year"] = closure_df["Inspection Date"].dt.year
+closure_df = closure_df.dropna(subset=["Year"])
+closure_df["Year"] = closure_df["Year"].astype(int)
+closure_df["Inspection ID"] = (
+    closure_df["Restaurant ID"].astype(str) + "_" +
+    closure_df["Inspection Date"].astype(str)
+)
+
+closures_mask = closure_df["Action"].str.contains(
+    "Establishment Closed by DOHMH", case=False, na=False
+)
+
+insp_boro = closure_df.groupby("Borough")["Inspection ID"].nunique().reset_index(name="Total Inspections")
+closures_boro = closure_df[closures_mask].groupby("Borough")["Inspection ID"].nunique().reset_index(name="Total Closures")
+merged_boro = insp_boro.merge(closures_boro, on="Borough", how="left")
+merged_boro["Total Closures"] = merged_boro["Total Closures"].fillna(0).astype(int)
+merged_boro["Closure Rate (%)"] = (merged_boro["Total Closures"] / merged_boro["Total Inspections"] * 100).round(2)
+merged_boro = merged_boro.sort_values("Closure Rate (%)", ascending=False).reset_index(drop=True)
+
+insp_year = closure_df.groupby("Year")["Inspection ID"].nunique().reset_index(name="Total Inspections")
+closures_year = closure_df[closures_mask].groupby("Year")["Inspection ID"].nunique().reset_index(name="Total Closures")
+merged_year = insp_year.merge(closures_year, on="Year", how="left")
+merged_year["Total Closures"] = merged_year["Total Closures"].fillna(0).astype(int)
+merged_year["Closure Rate (%)"] = (merged_year["Total Closures"] / merged_year["Total Inspections"] * 100).round(2)
+
+styled_table(merged_boro)
+```
+
+```{python}
+#| label: q3-plot-year
+#| code-fold: true
+#| code-summary: "Show code"
+
+fig_yr = px.line(
+    merged_year, x="Year", y="Closure Rate (%)",
+    markers=True,
+    title="Restaurant Closure Rate by Year (%)",
+    color_discrete_sequence=[STEEL],
+)
+fig_yr.update_traces(line_width=3, marker_size=10)
+fig_yr.update_layout(
+    xaxis=dict(tickvals=[2021, 2022, 2023, 2024]),
+    height=380,
+)
+fig_yr.show()
+```
+
+```{python}
+#| label: q3-plot-borough
+#| code-fold: true
+#| code-summary: "Show code"
+
+fig_bo = px.bar(
+    merged_boro, x="Borough", y="Closure Rate (%)",
+    color="Borough", color_discrete_sequence=PALETTE,
+    text=merged_boro["Closure Rate (%)"].apply(lambda v: f"{v:.2f}%"),
+    title="Restaurant Closure Rate by Borough (%)",
+)
+fig_bo.update_traces(textposition="outside")
+fig_bo.update_layout(showlegend=False, height=400)
+fig_bo.show()
+```
+
+::: {.callout-warning}
+**Key finding:** The citywide closure rate has risen year-over-year since 2021. At the borough level, Brooklyn has the highest closure rate while Staten Island is substantially lower as demonstrated consistently with its better average grades.
+:::
+
+---
+
+## Q4: Average Violation Score by Cuisine Category {#sec-q4}
+
+> **Question:** Which broad cuisine categories receive the highest average violation scores?
+
+```{python}
+#| label: q4-categorize
+#| code-fold: true
+#| code-summary: "Show code"
+
+CATEGORIES = {
+    "Asian":           ["Pakistani","Indian","Bangladeshi","Japanese","Chinese","Filipino",
+                        "Thai","Korean","Southeast Asian","Asian/Asian Fusion",
+                        "Chinese/Japanese","Indonesian","Afghan"],
+    "European":        ["French","New French","Irish","German","Polish","Russian",
+                        "Scandinavian","English","Continental","Czech","Basque",
+                        "Armenian","Eastern European","Portuguese","Spanish","Greek",
+                        "Turkish","Italian"],
+    "American":        ["American","New American","Tex-Mex","Southwestern","Soul Food",
+                        "Steakhouse","Californian","Hawaiian","Barbecue","Hamburgers",
+                        "Hotdogs","Hotdogs/Pretzels","Pizza","Donuts",
+                        "Pancakes/Waffles","Seafood","Chicken"],
+    "Latin American":  ["Peruvian","Brazilian","Chilean","Mexican","Latin American",
+                        "Caribbean","Tapas","Chimichurri","Creole","Creole/Cajun",
+                        "Cajun","Chinese/Cuban"],
+    "Beverages/Desserts": ["Coffee/Tea","Bakery Products/Desserts","Frozen Desserts",
+                           "Juice, Smoothies, Fruit Salads","Bottled Beverages",
+                           "Nuts/Confectionary"],
+    "Mixed/Other":     ["Jewish/Kosher","Moroccan","Egyptian","Lebanese","Iranian",
+                        "Middle Eastern","African","Ethiopian","Australian","Polynesian",
+                        "Vegetarian","Vegan","Fruits/Vegetables","Fusion","Mediterranean",
+                        "Other","Not Listed/Not Applicable","Soups/Salads/Sandwiches",
+                        "Sandwiches","Sandwiches/Salads/Mixed Buffet","Bagels/Pretzels",
+                        "Salads","Soups","Haute Cuisine"],
+}
+
+def categorize_cuisine(cuisine):
+    clow = str(cuisine).lower().strip()
+    for cat, kws in CATEGORIES.items():
+        for kw in kws:
+            if kw.lower() in clow:
+                return cat
+    return "Mixed/Other"
+
+cuisine_df = df.dropna(subset=["Score", "Cuisine Description"]).copy()
+cuisine_df["Cuisine Category"] = cuisine_df["Cuisine Description"].apply(categorize_cuisine)
+cuisine_unique = cuisine_df.drop_duplicates(subset=["Restaurant ID", "Inspection Date"]).copy()
+
+avg_score_cuisine = (
+    cuisine_unique.groupby("Cuisine Category")["Score"]
+    .mean().reset_index(name="Avg Violation Score")
+    .sort_values("Avg Violation Score", ascending=False)
+)
+avg_score_cuisine["Avg Violation Score"] = avg_score_cuisine["Avg Violation Score"].round(2)
+
+styled_table(avg_score_cuisine.reset_index(drop=True))
+```
+
+```{python}
+#| label: q4-plot
+#| code-fold: true
+#| code-summary: "Show code"
+
+fig = px.bar(
+    avg_score_cuisine, x="Cuisine Category", y="Avg Violation Score",
+    color="Cuisine Category", color_discrete_sequence=PALETTE,
+    text="Avg Violation Score",
+    title="Average Inspection Violation Score by Cuisine Category  <span style='font-size:0.8em;color:#888'>(lower = better)</span>",
+)
+fig.update_layout(showlegend=False,
+    yaxis_range=[0, avg_score_cuisine["Avg Violation Score"].max() * 1.15],
+    height=450)
+fig.update_traces(textposition="outside", texttemplate="%{text:.1f}")
+fig.show()
+```
+
+::: {.callout-note}
+**Key finding:** Asian cuisine restaurants consistently receive the highest average violation scores, while Beverages/Desserts establishments score lowest. This may reflect inspection complexity in kitchens handling raw proteins, live seafood, and complex preparation techniques face more scrutiny.
+:::
+
+---
+
+## Q5: Most Common Violations & Seasonal Patterns {#sec-q5}
+
+> **Question:** What are the top 5 violation codes, and do violations follow seasonal patterns?
+
+```{python}
+#| label: q5-compute
+#| code-fold: true
+#| code-summary: "Show code"
+
+viol_df = df.dropna(subset=["Violation Code"]).copy()
+viol_df = viol_df[viol_df["Violation Code"].str.strip() != ""]
+
+code_to_desc = (
+    viol_df.groupby("Violation Code")["Violation Description"]
+    .agg(lambda x: x.value_counts().idxmax())
+)
+viol_df["Violation Description"] = viol_df["Violation Code"].map(code_to_desc)
+
+code_crit = (
+    viol_df.groupby("Violation Code")["Critical Flag"]
+    .agg(lambda x: x.value_counts().idxmax())
+    .str.lower().str.strip()
+)
+
+top5_codes = viol_df["Violation Code"].value_counts().head(5).index.tolist()
+top5_df = viol_df[viol_df["Violation Code"].isin(top5_codes)].copy()
+
+summary_table = (
+    top5_df.groupby(["Violation Code", "Violation Description"])
+    .size().reset_index(name="Total Count")
+    .sort_values("Total Count", ascending=False)
+)
+summary_table["Severity"] = summary_table["Violation Code"].map(
+    lambda c: "🔴 Critical" if code_crit.get(c, "") in ["critical", "y", "yes"] else "🔵 Non-Critical"
+)
+summary_table["Violation Description"] = summary_table["Violation Description"].str[:60] + "…"
+
+styled_table(summary_table.reset_index(drop=True))
+```
+
+```{python}
+#| label: q5-plot-bar
+#| code-fold: true
+#| code-summary: "Show code"
+
+colors_bar = [
+    CORAL if code_crit.get(c, "") in ["critical", "y", "yes"] else STEEL
+    for c in top5_codes
+]
+
+fig = go.Figure()
+for code, color in zip(top5_codes, colors_bar):
+    row_data = summary_table[summary_table["Violation Code"] == code]
+    count = int(row_data["Total Count"].values[0]) if len(row_data) else 0
+    label = row_data["Severity"].values[0] if len(row_data) else ""
+    fig.add_trace(go.Bar(
+        x=[code], y=[count], name=f"{code} ({label})",
+        marker_color=color, text=[f"{count:,}"], textposition="outside",
+        hovertemplate=f"<b>{code}</b><br>Count: {count:,}<br>{label}<extra></extra>",
+    ))
+
+fig.update_layout(
+    title="Top 5 Most Common Violation Codes (2021–2024)<br>"
+          "<sup>🔴 = Critical  |  🔵 = Non-Critical</sup>",
+    xaxis_title="Violation Code", yaxis_title="Total Count",
+    showlegend=True, height=460,
+)
+fig.show()
+```
+
+```{python}
+#| label: q5-plot-yoy
+#| code-fold: true
+#| code-summary: "Show code"
+
+yearly_viol = (
+    top5_df.groupby(["Year", "Violation Code"]).size().reset_index(name="Count")
+)
+
+fig2 = px.line(
+    yearly_viol, x="Year", y="Count", color="Violation Code",
+    markers=True, color_discrete_sequence=PALETTE,
+    title="Top 5 Violations — Year Over Year Trend",
+    labels={"Count": "Violation Count"},
+)
+fig2.update_layout(xaxis=dict(tickvals=[2021, 2022, 2023, 2024]), height=420)
+fig2.show()
+```
+
+```{python}
+#| label: q5-seasonal
+#| code-fold: true
+#| code-summary: "Show code"
+
+def month_to_season(m):
+    if m in [12, 1, 2]: return "Winter"
+    if m in [3, 4, 5]:  return "Spring"
+    if m in [6, 7, 8]:  return "Summer"
+    return "Autumn"
+
+top5_df["Season"] = top5_df["Month"].apply(month_to_season)
+seasonal = top5_df.groupby(["Season", "Violation Code"]).size().reset_index(name="Count")
+season_order = ["Winter", "Spring", "Summer", "Autumn"]
+seasonal["Season"] = pd.Categorical(seasonal["Season"], categories=season_order, ordered=True)
+seasonal = seasonal.sort_values("Season")
+
+fig3 = px.bar(
+    seasonal, x="Season", y="Count", color="Violation Code",
+    barmode="group", color_discrete_sequence=PALETTE,
+    title="Top 5 Violations by Season",
+    category_orders={"Season": season_order},
+)
+fig3.update_layout(height=420)
+fig3.show()
+```
+
+::: {.callout-note}
+**Key findings:**
+
+- **10F** (non-food contact surfaces), although non-critical, is the single most common violation by a wide margin and a persistent but recurring issue.
+- **08A** (rodent/pest susceptibility) and **06D** / **02G** (food safety) represent significant critical risks.
+- Year-over-year trends show all top violations rising, consistent with increasing inspection volume.
+- **No strong seasonal pattern** was detected. The violations are distributed relatively evenly across seasons, suggesting these are structural compliance issues rather than temperature- or season-driven problems.
+:::
+
+---
+
+## Summary & Conclusions
+
+```{python}
+#| label: summary-table
+#| code-fold: true
+#| code-summary: "Show code"
+
+summary = pd.DataFrame({
+    "Question": [
+        "Q1: Inspection & Score Trends",
+        "Q2: Borough Grade Differences",
+        "Q3: Closure Rates",
+        "Q4: Cuisine & Violation Scores",
+        "Q5: Most Common Violations",
+    ],
+    "Key Finding": [
+        "Both inspection volume and average violation scores rose steadily 2021–2024.",
+        "Grades differ significantly across boroughs (ANOVA p < 0.001); Staten Island leads.",
+        "Citywide closure rate is rising; Brooklyn has the highest rate.",
+        "Asian cuisine has the highest avg violation score (≈20); Beverages/Desserts lowest.",
+        "10F (surface sanitation) dominates; no significant seasonal pattern detected.",
+    ],
+})
+styled_table(summary)
+```
+
+### Recommendations
+
+**For restaurant owners & operators:**
+
+- Prioritize non-food contact surface cleaning (10F) as it is by far the most cited violation.
+- Invest in pest-prevention infrastructure before inspection cycles, not after.
+- Understand that as inspection frequency increases citywide, any lapse in routine sanitation is more likely to be caught.
+
+**For consumers:**
+
+- Always check the letter grade posted at the entrance before dining.
+- Remember that grades fluctuate year-to-year (a current A does not guarantee perfection).
+
+**For future analysis:**
+
+- Cross-reference violation data with Yelp/Google ratings to explore whether diners notice or respond to grades.
+- Investigate zip-code-level variation within boroughs.
+- Incorporate census income data to test whether socioeconomic factors correlate with inspection outcomes.
+
+---
+
+## Data & Methods
+
+| Item | Detail |
+|---|---|
+| **Data source** | NYC Open Data - DOHMH Restaurant Inspection Results |
+| **API endpoint** | `https://data.cityofnewyork.us/resource/43nn-pn8j.json` |
+| **Date range** | January 2021 - December 2024 |
+| **Statistical test** | One-Way ANOVA (Q2) |
+| **Visualization** | Plotly (interactive) |
+| **Language** | Python 3 via Quarto + reticulate |
+| **Rendered** | `quarto render reptalytics_report.qmd` |
+
+---
+
+*Reptalytics · Baruch College, Zicklin School of Business · CIS 9650 Python Programming for Analytics*
+
+::: {.callout-note collapse="true"}
+## AI Usage Disclosure
+
+This report was produced with assistance from AI tools. Specifically, AI was used to:
+
+- Structure and author the Quarto document and its HTML/CSS styling
+- Clean up and refactor Python code from the original Jupyter notebooks
+- Create and improve several data visualizations
+- General editing of text and narrative throughout the report
+
+All analysis, research questions, findings, and interpretations are the original work of the Reptalytics team. The underlying data comes directly from NYC Open Data.
+:::
