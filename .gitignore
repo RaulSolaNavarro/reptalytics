@@ -33,3 +33,4 @@ secrets.py
 
 /.quarto/
 **/*.quarto_ipynb
+.positai
