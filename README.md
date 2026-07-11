@@ -1,4 +1,4 @@
-# Reptalytics — NYC Restaurant Inspection Analysis
+# Reptalytics: NYC Restaurant Inspection Analysis
 
 **Live report:** https://raulsolanavarro.github.io/reptalytics/reptalytics_report.html
 
